@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="iPhone">
+<meta name="theme-color" content="#000000">
+<title>iPhone</title>
+<style>
+  :root { --w: 1179; --h: 2556; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; touch-action: manipulation; }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* El "teléfono": mantiene la proporción exacta de la captura */
+  #phone {
+    position: relative;
+    width: min(100vw, calc(100dvh * 1179 / 2556));
+    aspect-ratio: 1179 / 2556;
+    container-type: inline-size;
+    overflow: hidden;
+    background: #000;
+  }
+  .screen {
+    position: absolute; inset: 0;
+    background-size: 100% 100%;
+    transition: opacity .35s ease, transform .45s cubic-bezier(.3,.7,.2,1);
+  }
+  #lock { background-image: url(img/lock.jpg); z-index: 2; }
+  #home { background-image: url(img/home.jpg); z-index: 1; }
+  #phone.unlocked #lock { opacity: 0; transform: translateY(-6%) scale(1.04); pointer-events: none; }
+  #phone:not(.unlocked) #home { transform: scale(.96); }
+
+  /* Teclas invisibles sobre el teclado de la captura (coordenadas en px de la captura 1179x2556) */
+  .key {
+    position: absolute; width: 20.4%; aspect-ratio: 1; transform: translate(-50%, -50%);
+    border-radius: 50%; border: 0; padding: 0; background: rgba(255,255,255,0); cursor: pointer;
+    transition: background .35s ease;
+  }
+  .key:active, .key.flash { background: rgba(255,255,255,.38); transition: background 0s; }
+
+  /* Puntos del código */
+  .dot {
+    position: absolute; width: 3.5%; aspect-ratio: 1; border-radius: 50%;
+    transform: translate(-50%, -50%) scale(.6); background: #fff; opacity: 0;
+    transition: opacity .08s, transform .12s;
+  }
+  .dot.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #dots { position: absolute; inset: 0; pointer-events: none; }
+  #dots.shake { animation: shake .5s cubic-bezier(.36,.07,.19,.97); }
+  @keyframes shake {
+    10%, 90% { transform: translateX(-1.2%); } 20%, 80% { transform: translateX(2.4%); }
+    30%, 50%, 70% { transform: translateX(-3.6%); } 40%, 60% { transform: translateX(3.6%); }
+  }
+
+  /* Etiquetas de apps de la pantalla de inicio */
+  .label {
+    position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+    font: 500 3.05cqw/1 -apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+    color: #fff; text-shadow: 0 .1cqw .6cqw rgba(0,0,0,.45); letter-spacing: -.02cqw;
+    pointer-events: none;
+  }
+
+  /* Zona secreta (arriba a la izquierda, sobre la hora): 3 toques seguidos = reiniciar */
+  #reset { position: absolute; left: 0; top: 0; width: 28%; height: 8%; z-index: 9; }
+</style>
+</head>
+<body>
+<div id="phone">
+  <div id="home" class="screen"></div>
+
+  <div id="lock" class="screen">
+    <div id="dots"></div>
+  </div>
+
+  <div id="reset"></div>
+</div>
+
+<script>
+/* ============ CONFIGURACIÓN ============ */
+
+// Dónde se esconden los 4 dígitos en la pantalla de inicio.
+// Orden = orden en el que lees el código (1.º, 2.º, 3.º, 4.º dígito).
+// "texto" es el nombre normal de la app; el dígito se añade detrás.
+const DIGIT_LABELS = [
+  { name: 'Música', x: 999, y: 1063 },
+  { name: 'Fotos',  x: 454, y: 1359 },
+  { name: 'Mail',   x: 727, y: 1359 },
+  { name: 'Notas',  x: 999, y: 1359 },
+];
+// Formato de cada etiqueta con el dígito. Cámbialo si quieres algo más discreto.
+const FORMAT = (name, d) => `${name} ${d}`;
+
+// Etiquetas que no cambian (se repintan porque se borraron de la captura).
+const STATIC_LABELS = [
+  { name: 'TransporteMadrid', x: 181, y: 1063, size: 2.55 },
+  { name: 'Google Maps',      x: 454, y: 1063 },
+  { name: 'Buscar',           x: 727, y: 1063 },
+  { name: 'Teléfono',         x: 181, y: 1359 },
+  { name: 'Kutxabank',        x: 181, y: 1655 },
+  { name: 'Gemini',           x: 454, y: 1655 },
+  { name: 'Instagram',        x: 727, y: 1655 },
+];
+
+// Posición de las teclas y puntos sobre la captura (px)
+const W = 1179, H = 2556;
+const KEYS = {
+  1:[285,996], 2:[589,996], 3:[894,996],
+  4:[285,1283],5:[589,1283],6:[894,1283],
+  7:[285,1570],8:[589,1570],9:[894,1570],
+  0:[589,1857],
+};
+const DOTS_Y = 609, DOTS_X = [422, 533, 644, 755];
+const CODE_LEN = 4;
+
+/* ============ LÓGICA ============ */
+const $ = s => document.querySelector(s);
+const phone = $('#phone'), lock = $('#lock'), home = $('#home'), dotsBox = $('#dots');
+const pct = (v, t) => (v / t * 100) + '%';
+
+let entry = '';        // lo que se está tecleando ahora
+let secret = null;     // código del primer intento (el que se guarda)
+let busy = false;
+
+// Teclas
+Object.entries(KEYS).forEach(([digit, [x, y]]) => {
+  const b = document.createElement('button');
+  b.className = 'key'; b.setAttribute('aria-label', digit);
+  b.style.left = pct(x, W); b.style.top = pct(y, H);
+  b.addEventListener('pointerdown', e => { e.preventDefault(); press(digit); });
+  lock.appendChild(b);
+});
+
+// Puntos
+const dotEls = DOTS_X.map(x => {
+  const d = document.createElement('div');
+  d.className = 'dot'; d.style.left = pct(x, W); d.style.top = pct(DOTS_Y, H);
+  dotsBox.appendChild(d); return d;
+});
+
+function renderDots() { dotEls.forEach((d, i) => d.classList.toggle('on', i < entry.length)); }
+
+function press(digit) {
+  if (busy || phone.classList.contains('unlocked')) return;
+  if (entry.length >= CODE_LEN) return;
+  entry += digit;
+  if (navigator.vibrate) navigator.vibrate(8);
+  renderDots();
+  if (entry.length === CODE_LEN) { busy = true; setTimeout(submit, 160); }
+}
+
+function submit() {
+  if (secret === null) {
+    // 1.er intento: falla y se guarda
+    secret = entry;
+    dotsBox.classList.add('shake');
+    if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+    setTimeout(() => {
+      dotsBox.classList.remove('shake');
+      entry = ''; renderDots(); busy = false;
+    }, 520);
+  } else {
+    // 2.º intento (cualquier código): desbloquea
+    buildHome(secret);
+    phone.classList.add('unlocked');
+    busy = false;
+  }
+}
+
+// Pantalla de inicio con el código escondido
+function buildHome(code) {
+  home.querySelectorAll('.label').forEach(n => n.remove());
+  const add = (text, x, y, size) => {
+    const l = document.createElement('div');
+    l.className = 'label'; l.textContent = text;
+    l.style.left = pct(x, W); l.style.top = pct(y, H);
+    if (size) l.style.fontSize = size + 'cqw';
+    home.appendChild(l);
+  };
+  STATIC_LABELS.forEach(l => add(l.name, l.x, l.y, l.size));
+  DIGIT_LABELS.forEach((l, i) => add(FORMAT(l.name, code[i]), l.x, l.y));
+}
+
+// Reiniciar: 3 toques rápidos arriba a la izquierda
+let taps = [];
+$('#reset').addEventListener('pointerdown', () => {
+  const now = Date.now();
+  taps = taps.filter(t => now - t < 900).concat(now);
+  if (taps.length >= 3) { taps = []; reset(); }
+});
+function reset() {
+  secret = null; entry = ''; busy = false; renderDots();
+  phone.classList.remove('unlocked');
+}
+
+// Para probar en ordenador con el teclado
+addEventListener('keydown', e => { if (/^[0-9]$/.test(e.key)) press(e.key); });
+
+// Evitar zoom/scroll accidentales
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('dblclick', e => e.preventDefault());
+</script>
+</body>
+</html>
